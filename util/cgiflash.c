@@ -9,7 +9,9 @@ Some flash handling cgi routines. Used for updating the ESPFS/OTA image.
 #include <libesphttpd/esp.h>
 #include "libesphttpd/cgiflash.h"
 #include "libesphttpd/espfs.h"
+#ifdef _DECL_cJSON
 #include "cJSON.h"
+#endif
 
 #include "httpd-platform.h"
 #ifdef ESP32
@@ -129,6 +131,7 @@ typedef struct __attribute__((packed)) {
 } OtaHeader;
 #endif
 
+#ifdef _DECL_cJSON
 static void cgiJsonResponseCommon(HttpdConnData *connData, cJSON *jsroot){
 	char *json_string = NULL;
 
@@ -147,10 +150,11 @@ static void cgiJsonResponseCommon(HttpdConnData *connData, cJSON *jsroot){
     }
     cJSON_Delete(jsroot);
 }
+#endif
 
 #ifdef ESP32
 CgiStatus ICACHE_FLASH_ATTR cgiUploadFirmware(HttpdConnData *connData) {
-#ifndef _DECL_app_update
+#if !defined(_DECL_app_update) || !defined(_DECL_cJSON) 
 	return HTTPD_CGI_DONE;
 #else
 	CgiUploadFlashDef *def=(CgiUploadFlashDef*)connData->cgiArg;
@@ -511,6 +515,7 @@ static void ICACHE_FLASH_ATTR resetTimerCb(void *arg) {
 #endif
 }
 
+#ifdef _DECL_cJSON
 // Handle request to reboot into the new firmware
 CgiStatus ICACHE_FLASH_ATTR cgiRebootFirmware(HttpdConnData *connData) {
 	if (connData->isConnectionClosed) {
@@ -601,6 +606,7 @@ CgiStatus ICACHE_FLASH_ATTR cgiEraseFlash(HttpdConnData *connData) {
 	cgiJsonResponseCommon(connData, jsroot); // Send the json response!
 	return HTTPD_CGI_DONE;
 }
+#endif
 
 /* @brief Check if selected partition has a valid APP
  *  Warning- this takes a long time to execute and dumps a bunch of stuff to the console!
@@ -623,6 +629,7 @@ static int check_partition_valid_app(const esp_partition_t *partition)
     return 1; // App in partition is valid
 }
 
+#ifdef _DECL_cJSON
 #define PARTITION_IS_FACTORY(partition)  ((partition->type == ESP_PARTITION_TYPE_APP) && (partition->subtype == ESP_PARTITION_SUBTYPE_APP_FACTORY))
 #define PARTITION_IS_OTA(partition)  ((partition->type == ESP_PARTITION_TYPE_APP) && (partition->subtype >= ESP_PARTITION_SUBTYPE_APP_OTA_MIN) && (partition->subtype <= ESP_PARTITION_SUBTYPE_APP_OTA_MAX))
 // Cgi to query info about partitions and firmware
@@ -726,3 +733,5 @@ CgiStatus ICACHE_FLASH_ATTR cgiGetFlashInfo(HttpdConnData *connData) {
 	cgiJsonResponseCommon(connData, jsroot); // Send the json response!
 	return HTTPD_CGI_DONE;
 }
+#endif
+

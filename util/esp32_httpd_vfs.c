@@ -15,7 +15,9 @@ Connector to let httpd use the vfs filesystem to serve the files in it.
 #include "libesphttpd/esp.h"
 #include "libesphttpd/httpd.h"
 #include "httpd-platform.h"
+#ifdef _DECL_cJSON
 #include "cJSON.h"
+#endif
 
 #define FILE_CHUNK_LEN    (1024)
 #define MAX_FILENAME_LENGTH (1024)
@@ -23,6 +25,8 @@ Connector to let httpd use the vfs filesystem to serve the files in it.
 // If the client does not advertise that he accepts GZIP send following warning message (telnet users for e.g.)
 static const char *gzipNonSupportedMessage = "HTTP/1.0 501 Not implemented\r\nServer: esp8266-httpd/"HTTPDVER"\r\nConnection: close\r\nContent-Type: text/plain\r\nContent-Length: 52\r\n\r\nYour browser does not accept gzip-compressed data.\r\n";
 
+
+#ifdef _DECL_cJSON
 static void cgiJsonResponseCommon(HttpdConnData *connData, cJSON *jsroot){
 	char *json_string = NULL;
 
@@ -41,6 +45,7 @@ static void cgiJsonResponseCommon(HttpdConnData *connData, cJSON *jsroot){
     }
     cJSON_Delete(jsroot);
 }
+#endif
 
 CgiStatus ICACHE_FLASH_ATTR cgiEspVfsGet(HttpdConnData *connData) {
 	FILE *file=connData->cgiData;
@@ -428,6 +433,7 @@ error_first:
 	}
 
 	if (connData->post.received == connData->post.len) {
+#ifdef _DECL_cJSON
 		//We're done.
 		cJSON *jsroot = cJSON_CreateObject();
 		if(state->file != NULL){
@@ -440,9 +446,25 @@ error_first:
 		cJSON_AddNumberToObject(jsroot, "bytes received", connData->post.received);
 		cJSON_AddNumberToObject(jsroot, "bytes written", state->b_written);
 		cJSON_AddBoolToObject(jsroot, "success", state->state==UPSTATE_DONE);
-		free(state);
 
 		cgiJsonResponseCommon(connData, jsroot); // Send the json response!
+#else
+		if(state->file != NULL){
+			fclose(state->file);
+			ESP_LOGD(__func__, "fclose: %s, r", state->filename);
+		}
+		ESP_LOGI(__func__, "Total: %d bytes written.", state->b_written);
+		httpdStartResponse(connData, 200);
+		httpdHeader(connData, "Content-Type", "application/json");
+		httpdEndHeaders(connData);
+		httpdSend(connData, "{\"filename\":", -1);
+		httpdSend_json(connData, state->filename, -1);
+		httpdSend(connData, "\",\"bytes received\":1", -1);
+		httpdSend(connData, ",\"bytes written\":1", -1);
+		httpdSend(connData, ",\"success\":", -1);
+		httpdSend(connData, state->state==UPSTATE_DONE ? "true}":"false}", -1);
+#endif
+		free(state);
 		return HTTPD_CGI_DONE;
 	} else {
 		//Ok, till next time.
