@@ -1,5 +1,12 @@
 #include <libesphttpd/esp.h>
 #include <libesphttpd/cgiredirect.h>
+#ifdef FREERTOS
+#include <libesphttpd/httpd-freertos.h>
+#endif
+
+#ifdef ESP32
+#include "esp_wifi.h"
+#endif
 
 #include "esp_log.h"
 
@@ -73,21 +80,25 @@ CgiStatus ICACHE_FLASH_ATTR cgiRedirectApClientToHostname(HttpdConnData *connDat
 #ifdef linux
 	return HTTPD_CGI_NOTFOUND;
 #else
-#ifndef FREERTOS
-	uint32 *remadr;
+  #ifndef FREERTOS
+	uint32 *remadr = (uint32 *)connData->remote_ip;
+  #else
+	uint32 *remadr = (uint32 *)esp_container_of(connData, RtosConnType, connData)->ip;
+  #endif
+  #ifndef ESP32
 	struct ip_info apip;
 	int x=wifi_get_opmode();
 	//Check if we have an softap interface; bail out if not
 	if (x!=2 && x!=3) return HTTPD_CGI_NOTFOUND;
-	remadr=(uint32 *)connData->remote_ip;
 	wifi_get_ip_info(SOFTAP_IF, &apip);
-	if ((*remadr & apip.netmask.addr) == (apip.ip.addr & apip.netmask.addr)) {
+  #else
+	wifi_mode_t mode = 0;
+	tcpip_adapter_ip_info_t apip;
+	if (esp_wifi_get_mode(&mode) != ESP_OK || mode == WIFI_MODE_STA) return HTTPD_CGI_NOTFOUND;
+	if (tcpip_adapter_get_ip_info(TCPIP_ADAPTER_IF_AP, &apip) != ESP_OK) return HTTPD_CGI_NOTFOUND;
+  #endif
+	if ((*remadr & apip.netmask.addr) == (apip.ip.addr & apip.netmask.addr))
 		return cgiRedirectToHostname(connData);
-	} else {
-		return HTTPD_CGI_NOTFOUND;
-	}
-#else
+#endif
 	return HTTPD_CGI_NOTFOUND;
-#endif
-#endif
 }

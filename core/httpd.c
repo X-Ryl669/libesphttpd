@@ -383,6 +383,46 @@ int ICACHE_FLASH_ATTR httpdSend_js(HttpdConnData *conn, const char *data, int le
     return 1;
 }
 
+/* encode for JSON. returns 0 or 1 - 1 = success */
+int ICACHE_FLASH_ATTR httpdSend_json(HttpdConnData *conn, const char *data, int len)
+{
+    int start = 0, end = 0;
+    char c;
+    if (len < 0) len = (int) strlen(data);
+    if (len==0) return 0;
+
+    for (end = 0; end < len; end++)
+    {
+        c = data[end];
+        if (c == 0)
+        {
+            // we found EOS
+            break;
+        }
+
+        if (c == '\b' || c == '\\' || c == '\"' || c == '\f' || c == '\n' || c == '\r' || c == '\t') {
+            if (start < end) httpdSend_orDie(conn, data + start, end - start);
+            start = end + 1;
+        }
+
+        if (c == '"') httpdSend_orDie(conn, "\\\"", 2);
+        else if (c == '\b') httpdSend_orDie(conn, "\\b", 2);
+        else if (c == '\f') httpdSend_orDie(conn, "\\f", 2);
+        else if (c == '\n') httpdSend_orDie(conn, "\\n", 2);
+        else if (c == '\r') httpdSend_orDie(conn, "\\r", 2);
+        else if (c == '\t') httpdSend_orDie(conn, "\\t", 2);
+        else if (c == '\\') {
+            // Unicode escaping is passed as is
+            if (end + 1 < len && data[end+1] == 'u') httpdSend_orDie(conn, "\\", 1);
+            else httpdSend_orDie(conn, "\\\\", 2);
+        }
+    }
+
+    if (start < end) httpdSend_orDie(conn, data + start, end - start);
+    return 1;
+}
+
+
 //Function to send any data in conn->priv.sendBuff. Do not use in CGIs unless you know what you
 //are doing! Also, if you do set conn->cgi to NULL to indicate the connection is closed, do it BEFORE
 //calling this.
@@ -632,42 +672,61 @@ static void ICACHE_FLASH_ATTR httpdProcessRequest(HttpdInstance *pInstance, Http
     }
 }
 
+const char * HttpMethodStr[] = { "GET", "POST", "OPTIONS", "PUT", "PATCH", "DELETE" };
+// Convert to the RequestTypes and return -1 if no method found, or the position of the next char if found
+int acceptMethod(HttpdConnData *conn, const char *h) {
+    for (int i = 0; i <= HTTPD_METHOD_DELETE; i++) {
+        size_t l = strlen(HttpMethodStr[i]);
+        if (strncmp(h, HttpMethodStr[i], l) == 0 && h[l] == ' ') {
+            conn->requestType = i;
+            return l+1;
+        }
+    }
+    return 0;
+}
+
+typedef enum {
+    Unknown = -1,
+    Host = 0,
+    Connection,
+    ContentLength,
+    ContentType,
+#ifdef CONFIG_ESPHTTPD_CORS_SUPPORT
+    AccessControlRequestHeaders,
+#endif
+
+    MAX_HEADER
+} UnderstoodHeaders;
+const char * understoodHeaders[] = { "Host", "Connection", "Content-Length", "Content-Type"
+#ifdef CONFIG_ESPHTTPD_CORS_SUPPORT
+    , "Access-Control-Request-Headers"
+#endif
+};
+static inline int acceptHeader(char * h, UnderstoodHeaders * headerType) {
+    *headerType = Unknown;
+    for (int i = 0; i < MAX_HEADER; i++) {
+        size_t l = strlen(understoodHeaders[i]);
+        if (strncasecmp(h, understoodHeaders[i], l)==0) {
+            int j = (int)l;
+            while(h[j] == ' ') j++;
+            if (h[j++] != ':') return 0;
+            while(h[j] == ' ') j++;
+            *headerType = (UnderstoodHeaders)i;
+            return j;
+        }
+    }
+    return 0;
+}
+
 //Parse a line of header data and modify the connection data accordingly.
 static CallbackStatus ICACHE_FLASH_ATTR httpdParseHeader(char *h, HttpdConnData *conn) {
-    int i;
-    char firstLine=0;
-    CallbackStatus status = CallbackSuccess;
-
-    if (strncmp(h, "GET ", 4)==0) {
-        conn->requestType = HTTPD_METHOD_GET;
-        firstLine=1;
-    } else if (strncasecmp(h, "Host:", 5)==0) {
-        i=5;
-        while (h[i]==' ') i++;
-        conn->hostName=&h[i];
-    } else if (strncmp(h, "POST ", 5)==0) {
-        conn->requestType = HTTPD_METHOD_POST;
-        firstLine=1;
-    } else if (strncmp(h, "OPTIONS ", 8)==0) {
-        conn->requestType = HTTPD_METHOD_OPTIONS;
-        firstLine=1;
-    } else if (strncmp(h, "PUT ", 4)==0) {
-        conn->requestType = HTTPD_METHOD_PUT;
-        firstLine=1;
-    } else if (strncmp(h, "PATCH ", 6)==0) {
-        conn->requestType = HTTPD_METHOD_PATCH;
-        firstLine=1;
-    } else if (strncmp(h, "DELETE ", 7)==0) {
-        conn->requestType = HTTPD_METHOD_DELETE;
-        firstLine=1;
-    }
-    if (firstLine) {
+    int i = acceptMethod(conn, h);
+    if (i > 0) {
         char *e;
 
-        //Skip past the space after POST/GET
-        i=0;
-        while (h[i]!=' ') i++;
-        conn->url=h+i+1;
+        //Skip past any space after POST/GET
+        while (h[i]==' ') i++;
+        conn->url=h+i;
 
         //Figure out end of url.
         e=(char*)strstr(conn->url, " ");
@@ -699,62 +758,65 @@ static CallbackStatus ICACHE_FLASH_ATTR httpdParseHeader(char *h, HttpdConnData 
             ESP_LOGD(TAG, "Cleaned URL path: %s", conn->url);
         }
 #endif // CONFIG_ESPHTTPD_SANITIZE_URLS
-    } else if (strncasecmp(h, "Connection:", 11)==0) {
-        i=11;
-        //Skip trailing spaces
-        while (h[i]==' ') i++;
-        if (strncmp(&h[i], "close", 5)==0) conn->priv.flags&=~HFL_CHUNKED; //Don't use chunked conn
-    } else if (strncasecmp(h, "Content-Length:", 15)==0) {
-        i=15;
-        //Skip trailing spaces
-        while (h[i]==' ') i++;
-        //Get POST data length
-        conn->post.len=atoi(h+i);
-
-        // Allocate the buffer
-        if (conn->post.len > HTTPD_MAX_POST_LEN) {
-            // we'll stream this in in chunks
-            conn->post.buffSize = HTTPD_MAX_POST_LEN;
-        } else {
-            conn->post.buffSize = conn->post.len;
-        }
-
-        ESP_LOGD(TAG, "Mallocced buffer for %d + 1 bytes of post data", conn->post.buffSize);
-        int bufferSize = conn->post.buffSize + 1;
-        conn->post.buff=(char*)malloc(bufferSize);
-        if (conn->post.buff==NULL) {
-            ESP_LOGE(TAG, "malloc failed %d bytes", bufferSize);
-            status = CallbackErrorMemory;
-        } else
+    }
+    UnderstoodHeaders header;
+    i = acceptHeader(h, &header);
+    switch (header)
+    {
+        case Host: conn->hostName = &h[i]; return CallbackSuccess;
+        case Connection: if (strncmp(&h[i], "close", 5)==0) conn->priv.flags&=~HFL_CHUNKED; return CallbackSuccess; //Don't use chunked conn
+        case ContentLength:
         {
-            conn->post.buffLen=0;
-        }
-    } else if (strncasecmp(h, "Content-Type: ", 14)==0) {
-        if (strstr(h, "multipart/form-data")) {
-            // It's multipart form data so let's pull out the boundary
-            // TODO: implement multipart support in the server
-            char *b;
-            const char* boundaryToken = "boundary=";
-            if ((b = strstr(h, boundaryToken)) != NULL) {
-                conn->post.multipartBoundary = b + strlen(boundaryToken);
-                ESP_LOGD(TAG, "boundary = %s", conn->post.multipartBoundary);
+            //Get POST data length
+            conn->post.len = atoi(&h[i]);
+
+            // Allocate the buffer
+            if (conn->post.len > HTTPD_MAX_POST_LEN) {
+                // we'll stream this in in chunks
+                conn->post.buffSize = HTTPD_MAX_POST_LEN;
+            } else {
+                conn->post.buffSize = conn->post.len;
             }
+
+            ESP_LOGD(TAG, "Mallocced buffer for %d + 1 bytes of post data", conn->post.buffSize);
+            int bufferSize = conn->post.buffSize + 1;
+            conn->post.buff=(char*)malloc(bufferSize);
+            if (conn->post.buff==NULL) {
+                ESP_LOGE(TAG, "malloc failed %d bytes", bufferSize);
+                return CallbackErrorMemory;
+            }
+            conn->post.buffLen=0;
+            return CallbackSuccess;
         }
-    }
+        case ContentType:
+        {
+            if (strstr(h, "multipart/form-data")) {
+                // It's multipart form data so let's pull out the boundary
+                // TODO: implement multipart support in the server
+                char *b = strstr(h, "boundary=");
+                if (b != NULL) {
+                    conn->post.multipartBoundary = b + 7;
+                    ESP_LOGD(TAG, "boundary = %s", conn->post.multipartBoundary);
+                }
+            }
+            return CallbackSuccess;
+        }
 #ifdef CONFIG_ESPHTTPD_CORS_SUPPORT
-    else if (strncmp(h, "Access-Control-Request-Headers: ", 32)==0) {
-        // CORS token must be repeated in the response, copy it into
-        // the connection token storage
-        ESP_LOGD(TAG, "CORS preflight request");
+        case AccessControlRequestHeaders:
+        {
+            // CORS token must be repeated in the response, copy it into
+            // the connection token storage
+            ESP_LOGD(TAG, "CORS preflight request");
 
-        strncpy(conn->priv.corsToken, h+strlen("Access-Control-Request-Headers: "), MAX_CORS_TOKEN_LEN);
+            strncpy(conn->priv.corsToken, h+i, MAX_CORS_TOKEN_LEN);
 
-        // ensure null termination of the token
-        conn->priv.corsToken[MAX_CORS_TOKEN_LEN-1] = 0;
-    }
+            // ensure null termination of the token
+            conn->priv.corsToken[MAX_CORS_TOKEN_LEN-1] = 0;
+            return CallbackSuccess;
+        }
 #endif
-
-    return status;
+        default: return CallbackSuccess;
+    }
 }
 
 //Make a connection 'live' so we can do all the things a cgi can do to it.
@@ -847,7 +909,6 @@ CallbackStatus ICACHE_FLASH_ATTR httpdRecvCb(HttpdInstance *pInstance, HttpdConn
             //This byte is a POST byte.
             conn->post.buff[conn->post.buffLen++]=data[x];
             conn->post.received++;
-            conn->hostName=NULL;
             if (conn->post.buffLen >= conn->post.buffSize || conn->post.received == conn->post.len) {
                 //Received a chunk of post data
                 conn->post.buff[conn->post.buffLen]=0; //zero-terminate, in case the cgi handler knows it can use strings

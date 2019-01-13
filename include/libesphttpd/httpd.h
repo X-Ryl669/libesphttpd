@@ -65,6 +65,9 @@ typedef enum
 	HTTPD_METHOD_DELETE
 } RequestTypes;
 
+// Avoid duplicating the method text in the code (reuse whenever appropriate)
+extern const char * HttpMethodStr[];
+
 typedef enum
 {
 	HTTPD_TRANSFER_CLOSE,
@@ -146,6 +149,8 @@ typedef struct {
 	const void *cgiArg2;
 } HttpdBuiltInUrl;
 
+
+
 void httpdRedirect(HttpdConnData *conn, const char *newUrl);
 
 // Decode a percent-encoded value.
@@ -203,6 +208,7 @@ bool httpdGetHeader(HttpdConnData *conn, const char *header, char *ret, int retL
 
 int httpdSend(HttpdConnData *conn, const char *data, int len);
 int httpdSend_js(HttpdConnData *conn, const char *data, int len);
+int httpdSend_json(HttpdConnData *conn, const char *data, int len);
 int httpdSend_html(HttpdConnData *conn, const char *data, int len);
 void httpdFlushSendBuffer(HttpdInstance *pInstance, HttpdConnData *conn);
 CallbackStatus httpdContinue(HttpdInstance *pInstance, HttpdConnData *conn);

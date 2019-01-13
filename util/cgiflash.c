@@ -14,7 +14,9 @@ Some flash handling cgi routines. Used for updating the ESPFS/OTA image.
 #include "httpd-platform.h"
 #ifdef ESP32
 #include "esp32_flash.h"
+#ifdef _DECL_app_update
 #include "esp_ota_ops.h"
+#endif
 #include "esp_log.h"
 #include "esp_flash_data_types.h"
 #include "esp_image_format.h"
@@ -99,7 +101,7 @@ CgiStatus ICACHE_FLASH_ATTR cgiGetFirmwareNext(HttpdConnData *connData) {
 #define FILETYPE_FLASH 1
 #define FILETYPE_OTA 2
 typedef struct {
-#ifdef ESP32
+#if defined(ESP32) && defined(_DECL_app_update)
 	esp_ota_handle_t update_handle;
 	const esp_partition_t *update_partition;
 	const esp_partition_t *configured;
@@ -148,6 +150,9 @@ static void cgiJsonResponseCommon(HttpdConnData *connData, cJSON *jsroot){
 
 #ifdef ESP32
 CgiStatus ICACHE_FLASH_ATTR cgiUploadFirmware(HttpdConnData *connData) {
+#ifndef _DECL_app_update
+	return HTTPD_CGI_DONE;
+#else
 	CgiUploadFlashDef *def=(CgiUploadFlashDef*)connData->cgiArg;
 	UploadState *state=(UploadState *)connData->cgiData;
 	esp_err_t err;
@@ -322,6 +327,7 @@ CgiStatus ICACHE_FLASH_ATTR cgiUploadFirmware(HttpdConnData *connData) {
 	}
 
 	return HTTPD_CGI_MORE;
+#endif
 }
 
 #else
