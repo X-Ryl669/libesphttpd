@@ -22,7 +22,7 @@ TARGET=mkespfsimage
 
 $(TARGET): $(OBJS)
 ifeq ("$(USE_GZIP_COMPRESSION)","yes")
-	$(CC) -o $@ $^ -lz
+	$(CC) -o $@ $^ -L.
 else
 	$(CC) -o $@ $^
 endif

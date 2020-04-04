@@ -23,12 +23,6 @@
 #include "heatshrink_encoder.h"
 #endif
 
-//Gzip
-#ifdef ESPFS_GZIP
-// If compiler complains about missing header, try running "sudo apt-get install zlib1g-dev"
-// to install missing package.
-#include <zlib.h>
-#endif
 
 //Cygwin e.a. needs O_BINARY. Don't miscompile if it's not set.
 #ifndef O_BINARY
@@ -100,38 +94,7 @@ size_t compressHeatshrink(uint8_t *in, int insize, uint8_t *out, int outsize, in
 #endif
 
 #ifdef ESPFS_GZIP
-size_t compressGzip(uint8_t *in, int insize, uint8_t *out, int outsize, int level) {
-	z_stream stream;
-	int zresult;
-
-	stream.zalloc = Z_NULL;
-	stream.zfree  = Z_NULL;
-	stream.opaque = Z_NULL;
-	stream.next_in = in;
-	stream.avail_in = insize;
-	stream.next_out = out;
-	stream.avail_out = outsize;
-	// 31 -> 15 window bits + 16 for gzip
-	zresult = deflateInit2 (&stream, level, Z_DEFLATED, 31, 8, Z_DEFAULT_STRATEGY);
-	if (zresult != Z_OK) {
-		fprintf(stderr, "DeflateInit2 failed with code %d\n", zresult);
-		exit(1);
-	}
-
-	zresult = deflate(&stream, Z_FINISH);
-	if (zresult != Z_STREAM_END) {
-		fprintf(stderr, "Deflate failed with code %d\n", zresult);
-		exit(1);
-	}
-
-	zresult = deflateEnd(&stream);
-	if (zresult != Z_OK) {
-		fprintf(stderr, "DeflateEnd failed with code %d\n", zresult);
-		exit(1);
-	}
-
-	return stream.total_out;
-}
+char * compressorCommandLine = "gzip -%d %s";
 
 char **gzipExtensions = NULL;
 
@@ -198,11 +161,44 @@ int handleFile(int f, char *name, int compression, int level, char **compName) {
 
 #ifdef ESPFS_GZIP
 	if (shouldCompressGzip(name)) {
+		// Copy the input file to a temporary file
+		FILE * f = fopen("__zz__", "wb");
+		if (f == NULL)
+		{
+			fprintf(stderr, "Could not open temp file\n");
+			exit(1);
+		}
+		fwrite(fdat, 1, size, f);
+		fclose(f);
+
+		// Launch compression line
+		char cmdLine[1024];
+		sprintf(cmdLine, compressorCommandLine, level, "__zz__");
+		strcat(cmdLine, " 2>&1 1>/dev/null");
+		system(cmdLine);
+
+		// Fetch compressed file
+		f = fopen("__zz__.gz", "rb");
+		if (f == NULL)
+		{
+			fprintf(stderr, "Could not open ctemp file\n");
+			exit(1);
+		}
+		fseek(f, 0, SEEK_END);
+		csize = ftell(f);
+		cdat = malloc(csize);
+		fseek(f, 0, SEEK_SET);
+		fread(cdat, 1, csize, f);
+		fclose(f);
+		unlink("__zz__.gz");
+		unlink("__zz__");
+/*		
 		csize = size*3;
 		if (csize<100) // gzip has some headers that do not fit when trying to compress small files
 			csize = 100; // enlarge buffer if this is the case
 		cdat=malloc(csize);
 		csize=compressGzip(fdat, size, cdat, csize, level);
+		*/
 		compression = COMPRESS_NONE;
 		flags = FLAG_GZIP;
 	} else
@@ -312,6 +308,10 @@ int main(int argc, char **argv) {
 		} else if (strcmp(argv[x], "-g")==0 && argc>=x-2) {
 			if (!parseGzipExtensions(argv[x+1])) err=1;
 			x++;
+		} else if (strcmp(argv[x], "-u")==0 && argc>=x-2) {
+			compressorCommandLine = argv[x+1];
+			x++;
+			fprintf(stderr, "Compressing with: %s\n", compressorCommandLine);
 #endif
 		} else {
 			err=1;
@@ -328,7 +328,7 @@ int main(int argc, char **argv) {
 		fprintf(stderr, "%s - Program to create espfs images\n", argv[0]);
 		fprintf(stderr, "Usage: \nfind | %s [-c compressor] [-l compression_level] ", argv[0]);
 #ifdef ESPFS_GZIP
-		fprintf(stderr, "[-g gzipped_extensions] ");
+		fprintf(stderr, "[-g gzipped_extensions] [-u compressor_command_line] ");
 #endif
 		fprintf(stderr, "> out.espfs\n");
 		fprintf(stderr, "Compressors:\n");
@@ -340,6 +340,7 @@ int main(int argc, char **argv) {
 		fprintf(stderr, "\nCompression level: 1 is worst but low RAM usage, higher is better compression \nbut uses more ram on decompression. -1 = compressors default.\n");
 #ifdef ESPFS_GZIP
 		fprintf(stderr, "\nGzipped extensions: list of comma separated, case sensitive file extensions \nthat will be gzipped. Defaults to 'html,css,js'\n");
+		fprintf(stderr, "Compressor command line: the command line to execute to compress a single file.\nDefaults to 'gzip -%%d %%s'\n");
 #endif
 		exit(0);
 	}

@@ -21,10 +21,11 @@ HTMLFILES := $(shell find $(PROJECT_PATH)/$(HTMLDIR) | sed -E 's/([[:space:]])/\
 JS_MINIFY_TOOL ?= uglifyjs
 YUI-COMPRESSOR ?= $(PROJECT_PATH)/../Tools/java.exe -jar $(PROJECT_PATH)/../Tools/yuicompressor-2.4.8.jar
 
-CFLAGS += -DFREERTOS -DESPFS_HEATSHRINK
+CFLAGS += -DFREERTOS 
+#-DESPFS_HEATSHRINK
 
-USE_HEATSHRINK := "yes"
-COMPONENT_ADD_INCLUDEDIRS += lib/heatshrink
+USE_HEATSHRINK := "no"
+#COMPONENT_ADD_INCLUDEDIRS += lib/heatshrink
 
 USE_GZIP_COMPRESSION := "yes"
 
@@ -54,7 +55,8 @@ else ifeq ("$(CONFIG_ESPHTTPD_USEYUICOMPRESSOR)","y")
 	cd html_compressed; find . | $(COMPONENT_BUILD_DIR)/mkespfsimage/mkespfsimage > $(COMPONENT_BUILD_DIR)/webpages.espfs; cd ..;
 else
 	echo "Not using uglifyjs or yui-compressor"
-	cd  $(PROJECT_PATH)/$(HTMLDIR) &&  find . | $(COMPONENT_BUILD_DIR)/mkespfsimage/mkespfsimage > $(COMPONENT_BUILD_DIR)/webpages.espfs
+#	cd  $(PROJECT_PATH)/$(HTMLDIR) &&  find . | $(COMPONENT_BUILD_DIR)/mkespfsimage/mkespfsimage  -u "echo %d > /dev/null && brotli -q 11 -S .gz %s" > $(COMPONENT_BUILD_DIR)/webpages.espfs
+	cd  $(PROJECT_PATH)/$(HTMLDIR) &&  find . | $(COMPONENT_BUILD_DIR)/mkespfsimage/mkespfsimage  -u "ect -strip -gzip -%d %s" > $(COMPONENT_BUILD_DIR)/webpages.espfs
 endif
 
 libwebpages-espfs.a: webpages.espfs
